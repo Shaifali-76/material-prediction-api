@@ -3,16 +3,26 @@ from pydantic import BaseModel
 import joblib
 import numpy as np
 import os
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="Material Model Prediction API")
+# Global variable to hold the pipeline
+model_bundle = {}
 
-# Load the entire Pipeline at startup
-try:
-    # The file contains a dictionary where 'material_model' is the full Pipeline
-    bundle = joblib.load("ml_models.sav")
-    material_pipeline = bundle["material_model"] 
-except Exception as e:
-    raise RuntimeError(f"Could not load model: {e}")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Load the FULL pipeline (includes the scaler)
+    try:
+        bundle = joblib.load("ml_models.sav")
+        # Use the pipeline object 'material_model' to ensure data is scaled correctly
+        model_bundle["pipeline"] = bundle["material_model"]
+        print("Model pipeline loaded successfully.")
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        raise RuntimeError(f"Could not load model: {e}")
+    yield
+    model_bundle.clear()
+
+app = FastAPI(title="Material Model Prediction API", lifespan=lifespan)
 
 class MaterialInput(BaseModel):
     Tensile_Strength: float
@@ -26,8 +36,11 @@ def home():
 
 @app.post("/predict")
 def predict(data: MaterialInput):
+    if "pipeline" not in model_bundle:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+        
     try:
-        # Prepare features in the exact order the model expects
+        # Convert Pydantic model to the format expected by the pipeline
         features = np.array([[ 
             data.Tensile_Strength,
             data.Weight_Capacity,
@@ -35,8 +48,8 @@ def predict(data: MaterialInput):
             data.Recyclability_Percent
         ]])
 
-        # Calling predict on the pipeline automatically applies the StandardScaler
-        prediction = material_pipeline.predict(features)
+        # The pipeline handles scaling AND prediction automatically
+        prediction = model_bundle["pipeline"].predict(features)
 
         return {
             "prediction": int(prediction[0]),
