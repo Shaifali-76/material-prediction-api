@@ -6,10 +6,11 @@ import os
 
 app = FastAPI(title="Material Model Prediction API")
 
-# Load model ONCE at startup
+# Load the entire Pipeline at startup
 try:
+    # The file contains a dictionary where 'material_model' is the full Pipeline
     bundle = joblib.load("ml_models.sav")
-    model = bundle["model"]   # 🔴 THIS WAS THE BUG
+    material_pipeline = bundle["material_model"] 
 except Exception as e:
     raise RuntimeError(f"Could not load model: {e}")
 
@@ -26,6 +27,7 @@ def home():
 @app.post("/predict")
 def predict(data: MaterialInput):
     try:
+        # Prepare features in the exact order the model expects
         features = np.array([[ 
             data.Tensile_Strength,
             data.Weight_Capacity,
@@ -33,7 +35,8 @@ def predict(data: MaterialInput):
             data.Recyclability_Percent
         ]])
 
-        prediction = model.predict(features)
+        # Calling predict on the pipeline automatically applies the StandardScaler
+        prediction = material_pipeline.predict(features)
 
         return {
             "prediction": int(prediction[0]),
