@@ -5,22 +5,23 @@ import numpy as np
 import os
 from contextlib import asynccontextmanager
 
-# Global variable to hold the pipeline
-model_bundle = {}
+# Use a dictionary or global to store the loaded pipeline
+ml_resources = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Load the FULL pipeline (includes the scaler)
+    # Load the model bundle once at startup
     try:
         bundle = joblib.load("ml_models.sav")
-        # Use the pipeline object 'material_model' to ensure data is scaled correctly
-        model_bundle["pipeline"] = bundle["material_model"]
+        # CRITICAL: Load the full pipeline to include scaling logic
+        ml_resources["pipeline"] = bundle["material_model"]
         print("Model pipeline loaded successfully.")
     except Exception as e:
-        print(f"Error loading model: {e}")
-        raise RuntimeError(f"Could not load model: {e}")
+        print(f"Startup Error: {e}")
+        raise RuntimeError(f"Could not load model file: {e}")
     yield
-    model_bundle.clear()
+    # Clean up resources on shutdown
+    ml_resources.clear()
 
 app = FastAPI(title="Material Model Prediction API", lifespan=lifespan)
 
@@ -36,11 +37,11 @@ def home():
 
 @app.post("/predict")
 def predict(data: MaterialInput):
-    if "pipeline" not in model_bundle:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-        
+    if "pipeline" not in ml_resources:
+        raise HTTPException(status_code=503, detail="Model pipeline is not initialized.")
+
     try:
-        # Convert Pydantic model to the format expected by the pipeline
+        # Convert input data to the shape (1, 4)
         features = np.array([[ 
             data.Tensile_Strength,
             data.Weight_Capacity,
@@ -48,8 +49,8 @@ def predict(data: MaterialInput):
             data.Recyclability_Percent
         ]])
 
-        # The pipeline handles scaling AND prediction automatically
-        prediction = model_bundle["pipeline"].predict(features)
+        # Calling predict on the PIPELINE automatically applies the StandardScaler
+        prediction = ml_resources["pipeline"].predict(features)
 
         return {
             "prediction": int(prediction[0]),
@@ -57,9 +58,11 @@ def predict(data: MaterialInput):
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log the error here in a real production environment
+        raise HTTPException(status_code=500, detail="Prediction failed. Check input formats.")
 
 if __name__ == "__main__":
     import uvicorn
+    # Use environment variable for port to support cloud platforms like Heroku/Render
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
